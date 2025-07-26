@@ -7,12 +7,28 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { useToast } from '@/hooks/use-toast';
 import { format, isAfter, isBefore, differenceInMinutes, isToday } from 'date-fns';
 
+// Utility function to sanitize text and prevent XSS
+const sanitizeText = (text: string): string => {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+};
+
 interface Todo {
   id: string;
   text: string;
   completed: boolean;
   createdAt: Date;
   dueDate?: Date;
+}
+
+// Add interface for parsed todo data from localStorage
+interface ParsedTodo {
+  id: string;
+  text: string;
+  completed: boolean;
+  createdAt: string;
+  dueDate?: string;
 }
 
 type FilterType = 'all' | 'active' | 'completed';
@@ -42,12 +58,18 @@ const TodoApp = () => {
     
     const savedTodos = localStorage.getItem('futuristic-todos');
     if (savedTodos) {
-      const parsedTodos = JSON.parse(savedTodos).map((todo: any) => ({
-        ...todo,
-        createdAt: new Date(todo.createdAt),
-        dueDate: todo.dueDate ? new Date(todo.dueDate) : undefined
-      }));
-      setTodos(parsedTodos);
+      try {
+        const parsedTodos = JSON.parse(savedTodos).map((todo: ParsedTodo) => ({
+          ...todo,
+          createdAt: new Date(todo.createdAt),
+          dueDate: todo.dueDate ? new Date(todo.dueDate) : undefined
+        }));
+        setTodos(parsedTodos);
+      } catch (error) {
+        console.error('Error parsing saved todos:', error);
+        // Clear corrupted data
+        localStorage.removeItem('futuristic-todos');
+      }
     }
   }, []);
 
@@ -61,6 +83,9 @@ const TodoApp = () => {
     if (notificationPermission !== 'granted') return;
 
     const now = new Date();
+    const shownNotifications = JSON.parse(localStorage.getItem('shown-notifications') || '[]');
+    const updatedNotifications: string[] = [];
+    
     todos.forEach(todo => {
       if (todo.completed || !todo.dueDate) return;
 
@@ -70,7 +95,14 @@ const TodoApp = () => {
 
       // Create unique notification key to prevent duplicate notifications
       const notificationKey = `${todo.id}-${todo.dueDate.getTime()}`;
-      const shownNotifications = JSON.parse(localStorage.getItem('shown-notifications') || '[]');
+      
+      // Clean up old notifications (older than 24 hours)
+      const oneDayAgo = now.getTime() - (24 * 60 * 60 * 1000);
+      const isOldNotification = todo.dueDate.getTime() < oneDayAgo;
+      
+      if (!isOldNotification) {
+        updatedNotifications.push(notificationKey);
+      }
 
       if ((isOverdue || isDueSoon) && !shownNotifications.includes(notificationKey)) {
         const title = isOverdue ? 'Task Overdue!' : 'Task Due Soon!';
@@ -85,9 +117,8 @@ const TodoApp = () => {
         });
 
         // Mark notification as shown
-        shownNotifications.push(notificationKey);
-        localStorage.setItem('shown-notifications', JSON.stringify(shownNotifications));
-
+        updatedNotifications.push(notificationKey);
+        
         // Show in-app toast
         toast({
           title,
@@ -96,6 +127,11 @@ const TodoApp = () => {
         });
       }
     });
+    
+    // Limit the size of notifications array to prevent localStorage bloat
+    const maxNotifications = 100;
+    const finalNotifications = updatedNotifications.slice(-maxNotifications);
+    localStorage.setItem('shown-notifications', JSON.stringify(finalNotifications));
   }, [todos, notificationPermission, toast]);
 
   // Check notifications every minute
@@ -135,7 +171,7 @@ const TodoApp = () => {
 
       const newTodo: Todo = {
         id: Date.now().toString(),
-        text: inputValue.trim(),
+        text: sanitizeText(inputValue.trim()),
         completed: false,
         createdAt: new Date(),
         dueDate
@@ -183,7 +219,7 @@ const TodoApp = () => {
   const saveEdit = () => {
     if (editValue.trim() && editingId) {
       setTodos(todos.map(todo => 
-        todo.id === editingId ? { ...todo, text: editValue.trim() } : todo
+        todo.id === editingId ? { ...todo, text: sanitizeText(editValue.trim()) } : todo
       ));
       setEditingId(null);
       setEditValue('');
@@ -410,9 +446,10 @@ const TodoApp = () => {
                       </div>
                     ) : (
                       <div>
-                        <p className={`text-lg ${todo.completed ? 'line-through text-muted-foreground' : 'text-foreground'} transition-all duration-300`}>
-                          {todo.text}
-                        </p>
+                        <p 
+                          className={`text-lg ${todo.completed ? 'line-through text-muted-foreground' : 'text-foreground'} transition-all duration-300`}
+                          dangerouslySetInnerHTML={{ __html: todo.text }}
+                        />
                         <div className="flex flex-col sm:flex-row sm:items-center gap-2 text-sm">
                           <span className="text-muted-foreground">
                             Created: {todo.createdAt.toLocaleDateString()} at {todo.createdAt.toLocaleTimeString()}
